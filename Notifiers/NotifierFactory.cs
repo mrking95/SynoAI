@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SynoAI.Notifiers.Pushbullet;
+using SynoAI.Notifiers.Telegram;
 using SynoAI.Notifiers.Webhook;
 using System;
 using System.Collections.Generic;
@@ -26,6 +27,9 @@ namespace SynoAI.Notifiers
                     break;
                 case NotifierType.Webhook:
                     factory = new WebhookFactory();
+                    break;
+                case NotifierType.Telegram:
+                    factory = new TelegramFactory();
                     break;
                 default:
                     throw new NotImplementedException(type.ToString());

@@ -17,6 +17,10 @@ namespace SynoAI.Notifiers
         /// <summary>
         /// Calls a webhook with the image attached.
         /// </summary>
-        Webhook
+        Webhook,
+        /// <summary>
+        /// Sends a notification message and image using the Telegram Bot API.
+        /// </summary>
+        Telegram
     }
 }
