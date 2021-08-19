@@ -37,7 +37,7 @@ I made this application mostly for myself in order to improve upon Christopher A
 * [Example appsettings.json](#example-appsettingsjson)
 * [Problems/Debugging](#problemsdebugging)
   * [Logging](#logging)
-  * [Common Synology Error Codes](#common-synology-error-codes)
+  * [Trouble Shooting](#trouble-shooting)
 
 ## Features
 * Triggered via an Action Rule from Synology Surveillance Station
@@ -54,11 +54,21 @@ An example appsettings.json configuration file can be found [here](#example-apps
 * Url [required]: The URL and port of your NAS, e.g. http://{IP}:{Port}
 * User [required]: The user that will be used to request API snapshots
 * Password [required]: The password of the user above
+* AllowInsecureUrl [optional] (Default ```false```): Whether to allow an insecure HTTPS connection to the Synology API
 * Cameras [required]: An array of camera objects
   * Name: [required]: The name of the camera on Surveillance Station
   * Types: [required]: An array of types that will trigger a notification when detected by the AI, e.g. ["Person", "Car"]
-  * Threshold [required]: An integer denoting the required confidence of the AI to trigger the notification, e.g. 40 means that the AI must be 40% sure that the object detected was a person before SynoAI sends a notification.
+  * Threshold [required]: An integer denoting the required confidence of the AI to trigger the notification, e.g. 40 means that the AI must be 40% sure that the object detected was a person before SynoAI sends a notification
+  * MinSizeX [optional] (Default: ```NULL```): The minimum pixels that the object must be horizontally to trigger a change (will override the default set on the top level MinSizeX)
+  * MinSizeY [optional] (Default: ```NULL```): The minimum pixels that the object must be vertically to trigger a change (will override the default set on the top level MinSizeY).
+  * Rotate [optional] (Default: ```0```) The degrees to rotate the image after it's captured from SurveillanceStation. The rotation will be applied before it's passed to the AI.
 * Notifiers [required]: See [notifications](#notifications)
+* Quality [optional] (Default: ```Balanced```): The quality, aka "profile type" to use when taking a snapshot. This will be based upon the settings of the streams you have configured in Surveillance Station. i.e. if your low, balanced and high streams have the same settings in Surveillance Station, then this setting will make no difference. But if you have a high quality 4k stream, a balance 1080p stream and a low 720p stream, then setting to high will return and process a 4k image. Note that the higher quality the snapshot, the longer the notification will take. Additionally, the larger the image, the smaller your detected objects may be, so ensure you set the MinSizeX/MinSizeY values respectively.
+  * High: Takes the snapshot using the profile type "High quality"
+  * Balanced: Takes the snapshot using the profile type "Balanced"
+  * Low: Takes the snapshot using the profile type "Low bandwidth" 
+* MinSizeX [optional] (Default: ```50```): The minimum size in pixels that the object must be to trigger a change (will be ignored if specified on the Camera)
+* MinSizeY [optional] (Default: ```50```): The minimum size in pixels that the object must be to trigger a change (will be ignored if specified on the Camera).
 * Delay [optiona] (Default: ```5000```): The period of time in milliseconds (ms) that must occur between the last motion detection of camera and the next time it'll be processed. i.e. if your delay is set to 5000 and your camera reports motion 4 seconds after it had already reported motion to SynoAI, then the check will be ignored. However, if the report from Surveillance Station is more than 5000ms, then the cameras image will be processed.
 * DrawMode [optional] (Default: ```Matches```): Whether to draw all predictions from the AI on the capture image:
   * Matches: Will draw boundary boxes over any object/person that matches the types defined on the cameras
@@ -69,7 +79,8 @@ An example appsettings.json configuration file can be found [here](#example-apps
 * FontSize [optiona] (Default: ```12```): The size of the font to use (in pixels) when labelling the boundary boxes on the output image
 * FontColor [optiona] (Default: ```#FF0000```): The colour of the text for the labels when labelling the boundary boxes on the output image
 * TextOffsetX [optional] (Default: ```2```) : The number of pixels to offset the label from the left of the inside of the boundary image on the output image
-* TextOffsetY [optional] (Default: ```2```) : The number of pixels to offset the label from the top of the inside of the boundary image on the output image.
+* TextOffsetY [optional] (Default: ```2```) : The number of pixels to offset the label from the top of the inside of the boundary image on the output image
+* SaveOriginalSnapshot [optional] (Default: ```false```): Whether to save the source snapshot that was captured from the API before it was sent to and processed by the AI.
 
 ## Development Configs
 Configs which should be changed for debugging (change at own risk):
@@ -94,14 +105,10 @@ The Deepstack API is a free to use AI that can identify objects, faces and more.
 ```json
 "AI": {
   "Type": "DeepStack",
-  "Url": "http://10.0.0.10:83",
-  "MinSizeX": 100,
-  "MinSizeY": 100
+  "Url": "http://10.0.0.10:83"
 }
 ```
 * Url [required]: The URL of the AI to POST the image to
-* MinSizeX [optional] (Default: ```50```): The minimum size in pixels that the object must be to trigger a change
-* MinSizeY [optional] (Default: ```50```): The minimum size in pixels that the object must be to trigger a change.
 
 ## Notifications
 
@@ -203,6 +210,8 @@ The email notification will send and email with the attached image to the specif
   * STARTTLSWHENAVAILABLE: Elevates the connection to use TLS encryption immediately after reading the greeting and capabilities of the server, but only if the server supports the STARTTLS extension.
 
 #### Gmail
+Note that to send email using GMail you may need to log into your Google Account (or Admin Console) and allow "[Less secure app access](https://support.google.com/accounts/answer/6010255)".
+
 ```json
 {
   "Type": "Email",
@@ -254,11 +263,9 @@ The top level steps are:
 * Add Action Rules to Synology Surveillance Station's motion alerts in order to trigger the SynoAI API.
 
 ### 1) Configure Deepstack
-The following instructions explain how to set up the Deepstack image using the Docker app built into DSM. Before continuing, you'll need to obtain a *free* API key from [Deepstack](https://www.deepstack.cc/install/docker). *UPDATE 2020-02-04 - It looks like DeepStack is now "free forever" and doesn't even need a free API key. I haven't investigated this yet, but it's seems as though you might just be able to get the docker image now without activating.*
+The following instructions explain how to set up the Deepstack image using the Docker app built into DSM. 
 
-* Download the deepquestai/deepstack image by either;
-  * Searching the registry for deepquestai/deepstack
-  * Choose the tag cpu-x6-beta, or noavx; this is dependent on the capabilities of your NAS.
+* Download the deepquestai/deepstack:latest image
 * Run the image
 * Enter a name for the image, e.g. deepstack
 * Edit the advanced settings
@@ -268,9 +275,9 @@ The following instructions explain how to set up the Deepstack image using the D
 * On the Environment tab;
   * Set MODE: Low
   * Set VISION-DETECTION: True
-* Accept the advnaced settings and then run the image
-* Open a webbrowser and go to the Deepstack page by navigating to http://{YourIP}:{YourDeepstackPort}
-* If you've set everything up successfully then you will be able to enter your API key in here and move onto the next step.
+* Accept the advanced settings and then run the image
+* Open a web browser and go to the Deepstack page by navigating to http://{YourIP}:{YourDeepstackPort}
+* If you've set everything up successfully and you're using the latest version of DeepStack, then you'll see a message saying "DeepStack Activated"
    
 ### 2) Configure SynoAI
 The following instructions explain how to set up the SynoAI image using the Docker app built into DSM. For docker-compose, see the example file in the src, or in the documentation below.
@@ -391,11 +398,12 @@ services:
   "User": "SynologyUser",
   "Password": "SynologyPassword",
 
+  "MinSizeX": 100,
+  "MinSizeY": 100,
+  
   "AI": {
     "Type": "DeepStack",
-    "Url": "http://10.0.0.10:83",
-    "MinSizeX": 100,
-    "MinSizeY": 100
+    "Url": "http://10.0.0.10:83"
   },
 
   "Notifiers": [
@@ -415,7 +423,9 @@ services:
     {
       "Name": "Driveway",
       "Types": [ "Person", "Car" ],
-      "Threshold": 45
+      "Threshold": 45,
+      "MinSizeX": 250,
+      "MinSizeY": 500
     },
     {
       "Name": "BackDoor",
@@ -442,7 +452,25 @@ If issues are encountered, to get more verbose information in the logs, change t
 ```
 This will output the full information log and help identify where things are going wrong, as well as displaying the confidence percentages from Deepstack.
 
-### Common Synology Error Codes
+### Trouble Shooting
+
+#### "Failed due to Synology API error code X"
+* 400 Invalid password.
+  * If your password is definitely correct and you are still getting a 400 error code, then there's potentially an issue with the Synology DSM user configuration. However, if you cannot see any issues with the permissions, try creating a new user from SurveillanceStation directly.
+* 401 Guest or disabled account.
+* 402 Permission denied.
+* 403 One time password not specified.
+  * You have Two-Factor Authentication enabled and this is not currently support. Please create a dedicated user account without 2FA limited to just SurveillanceStation.
+* 404 One time password authenticate failed.
+* 405 App portal incorrect.
+* 406 OTP code enforced.
+* 407 Max Tries (if auto blocking is set to true).
+* 408 Password Expired Can not Change.
+* 409 Password Expired.
+* 410 Password must change (when first time use or after reset password by admin).
+* 411 Account Locked (when account max try exceed).
+
+#### Common Synology Error Codes
 * 100: Unknown error
 * 101: Invalid parameters
 * 102: API does not exist
@@ -450,6 +478,12 @@ This will output the full information log and help identify where things are goi
 * 104: This API version is not supported
 * 105: Insufficient user privilege
   * If this occurs, check your username and password, or;
-  * Try creating a specific user for Synology Surveillance Station
+  * Try creating a specific user for Synology Surveillance Station, or;
+  * Ensure your user has permission to the Surveillance Station application
 * 106: Connection time out
 * 107: Multiple login detected
+
+#### DeepStack
+
+* DeepStackAI: Failed to call API with HTTP status code 'Forbidden'
+  * Ensure that you have enabled VISION-DETECTION and correctly spelled it

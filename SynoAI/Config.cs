@@ -30,6 +30,10 @@ namespace SynoAI
         /// The password to login to the API with.
         /// </summary>
         public static string Password { get; private set; }
+        /// <summary>
+        /// Allow insecure URL Access to the Synology API.
+        /// </summary>
+        public static bool AllowInsecureUrl {get;private set;}
 
         /// <summary>
         /// The version of the SYNO.API.Auth API to use.
@@ -78,14 +82,18 @@ namespace SynoAI
         /// The offset from the top of the image boundary box.
         /// </summary>
         public static int TextOffsetY { get; private set; }
+        /// <summary>
+        /// Whether this original snapshot generated from the API should be saved to the file system.
+        /// </summary>
+        public static bool SaveOriginalSnapshot { get; private set; }
 
         /// <summary>
         /// The artificial intelligence system to process the images with.
         /// </summary>
         public static AIType AI { get; private set; }
         public static string AIUrl { get; private set; }
-        public static int AIMinSizeX { get; private set; }
-        public static int AIMinSizeY { get; private set; }
+        public static int MinSizeX { get; private set; }
+        public static int MinSizeY { get; private set; }
 
         /// <summary>
         /// The list of cameras.
@@ -112,9 +120,12 @@ namespace SynoAI
         public static void Generate(ILogger logger, IConfiguration configuration)
         {
             logger.LogInformation("Processing config.");
+
             Url = configuration.GetValue<string>("Url");
-            Username = configuration.GetValue<string>("User");
+            
+            Username = configuration.GetValue<string>("User");  // "Username" returns the local system account when debugging, which isn't ideal. Need to resolve this.
             Password = configuration.GetValue<string>("Password");
+            AllowInsecureUrl = configuration.GetValue<bool>("AllowInsecureUrl", false);
 
             ApiVersionAuth = configuration.GetValue<int>("ApiVersionInfo", 6);      // DSM 6.0 beta2
             ApiVersionCamera = configuration.GetValue<int>("ApiVersionCamera", 9);  // Surveillance Station 8.0
@@ -133,11 +144,14 @@ namespace SynoAI
             TextOffsetX = configuration.GetValue<int>("TextOffsetX", 4);
             TextOffsetY = configuration.GetValue<int>("TextOffsetY", 2);
 
+            MinSizeX = configuration.GetValue<int>("MinSizeX", 50);
+            MinSizeY = configuration.GetValue<int>("MinSizeY", 50);
+
+            SaveOriginalSnapshot = configuration.GetValue<bool>("SaveOriginalSnapshot", false);
+
             IConfigurationSection aiSection = configuration.GetSection("AI");
             AI = aiSection.GetValue<AIType>("Type", AIType.DeepStack);
             AIUrl = aiSection.GetValue<string>("Url");
-            AIMinSizeX = aiSection.GetValue<int>("MinSizeX", 50);
-            AIMinSizeY = aiSection.GetValue<int>("MinSizeY", 50);
 
             Cameras = GenerateCameras(logger, configuration);
             Notifiers = GenerateNotifiers(logger, configuration);

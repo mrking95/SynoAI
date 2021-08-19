@@ -73,38 +73,110 @@ namespace SynoAI.Controllers
             Stopwatch overallStopwatch = Stopwatch.StartNew();
 
             // Take the snapshot from Surveillance Station
-            byte[] imageBytes = await GetSnapshot(id);
+            byte[] snapshot = await GetSnapshot(id);
+            snapshot = PreProcessSnapshot(camera, snapshot);
+
+            // Save the original unprocessed image if required
+            if (Config.SaveOriginalSnapshot)
+            {
+                _logger.LogInformation($"{id}: Saving original image before processing");
+                SnapshotManager.SaveOriginalImage(_logger, camera, snapshot);
+            }
+
+            // Get the min X and Y values
+            int minX = camera.GetMinSizeX();
+            int minY = camera.GetMinSizeY();
 
             // Use the AI to get the valid predictions and then get all the valid predictions, which are all the AI predictions where the result from the AI is 
             // in the list of types and where the size of the object is bigger than the defined value.
-            IEnumerable<AIPrediction> predictions = await GetAIPredications(camera, imageBytes);
-            IEnumerable<AIPrediction> validPredictions = predictions.Where(x =>
-                camera.Types.Contains(x.Label, StringComparer.OrdinalIgnoreCase) &&     // Is a type we care about
-                x.SizeX >= Config.AIMinSizeX && x.SizeY >= Config.AIMinSizeY)           // Is bigger than the minimum size
-                .ToList();
+            IEnumerable<AIPrediction> predictions = await GetAIPredications(camera, snapshot);
+            if (predictions != null)
+            {
+                IEnumerable<AIPrediction> validPredictions = predictions.Where(x =>
+                    camera.Types.Contains(x.Label, StringComparer.OrdinalIgnoreCase) &&     // Is a type we care about
+                    x.SizeX >= minX && x.SizeY >= minY)                                     // Is bigger than the minimum size
+                    .ToList();
 
-            if (validPredictions.Count() > 0)
-            {
-                // Because we don't want to process the image if it isn't even required, then we pass the snapshot manager to the notifiers. It will then perform 
-                // the necessary actions when it's GetImage method is called.
-                SnapshotManager snapshotManager = new SnapshotManager(imageBytes, predictions, validPredictions, _snapshotManagerLogger);
-                
-                // Limit the predictions to just those defined by the camera
-                predictions = predictions.Where(x => camera.Types.Contains(x.Label, StringComparer.OrdinalIgnoreCase)).ToList();
-                await SendNotifications(camera, snapshotManager, predictions.Select(x=> x.Label).ToList());
+                if (validPredictions.Count() > 0)
+                {
+                    // Because we don't want to process the image if it isn't even required, then we pass the snapshot manager to the notifiers. It will then perform 
+                    // the necessary actions when it's GetImage method is called.
+                    SnapshotManager snapshotManager = new SnapshotManager(snapshot, predictions, validPredictions, _snapshotManagerLogger);
+                    
+                    // Limit the predictions to just those defined by the camera
+                    predictions = predictions.Where(x => camera.Types.Contains(x.Label, StringComparer.OrdinalIgnoreCase)).ToList();
+                    await SendNotifications(camera, snapshotManager, predictions.Select(x=> x.Label).ToList());
+                }
+                else if (predictions.Count() > 0)
+                {
+                    // We got predictions back from the AI, but nothing that should trigger an alert
+                    _logger.LogInformation($"{id}: Nothing detected by the AI exceeding the defined confidence level and/or minimum size");
+                }
+                else
+                {
+                    // We didn't get any predictions whatsoever from the AI
+                    _logger.LogInformation($"{id}: Nothing detected by the AI");
+                }
+
+                _logger.LogInformation($"{id}: Finished ({overallStopwatch.ElapsedMilliseconds}ms).");
             }
-            else if (predictions.Count() > 0)
+        }
+
+        /// <summary>
+        /// Handles any required preprocessing of the captured image.
+        /// </summary>
+        /// <param name="camera">The camera that the snapshot is from.</param>
+        /// <param name="snapshot">The image data.</param>
+        /// <returns>A byte array of the image.</returns>
+        private byte[] PreProcessSnapshot(Camera camera, byte[] snapshot)
+        {
+            if (camera.Rotate == 0)
             {
-                // We got predictions back from the AI, but nothing that should trigger an alert
-                _logger.LogInformation($"{id}: Nothing detected by the AI exceeding the defined confidence level");
-            }
-            else
-            {
-                // We didn't get any predictions whatsoever from the AI
-                _logger.LogInformation($"{id}: Nothing detected by the AI");
+                return snapshot;
             }
 
-            _logger.LogInformation($"{id}: Finished ({overallStopwatch.ElapsedMilliseconds}ms).");
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            // Load the bitmap & rotate the image
+            SKBitmap bitmap = SKBitmap.Decode(new MemoryStream(snapshot));
+            _logger.LogInformation($"{camera.Name}: Rotating image {camera.Rotate} degrees.");
+            bitmap = Rotate(bitmap, camera.Rotate);
+
+            using (SKPixmap pixmap = bitmap.PeekPixels())
+            using (SKData data = pixmap.Encode(SKEncodedImageFormat.Jpeg, 100)) 
+            { 
+                _logger.LogInformation($"{camera.Name}: Image preprocessing complete ({stopwatch.ElapsedMilliseconds}ms).");
+                return data.ToArray();
+            }
+        }
+
+        /// <summary>
+        /// Rotates the image to the specified angle.
+        /// </summary>
+        /// <param name="bitmap">The bitmap to rotate.</param>
+        /// <param name="angle">The angle to rotate to.</param>
+        /// <returns>The rotated bitmap.</returns>
+        private SKBitmap Rotate(SKBitmap bitmap, double angle)
+        {
+            double radians = Math.PI * angle / 180;
+            float sine = (float)Math.Abs(Math.Sin(radians));
+            float cosine = (float)Math.Abs(Math.Cos(radians));
+            int originalWidth = bitmap.Width;
+            int originalHeight = bitmap.Height;
+            int rotatedWidth = (int)(cosine * originalWidth + sine * originalHeight);
+            int rotatedHeight = (int)(cosine * originalHeight + sine * originalWidth);
+
+            SKBitmap rotatedBitmap = new SKBitmap(rotatedWidth, rotatedHeight);
+            using (SKCanvas canvas = new SKCanvas(rotatedBitmap))
+            {
+                canvas.Clear();
+                canvas.Translate(rotatedWidth / 2, rotatedHeight / 2);
+                canvas.RotateDegrees((float)angle);
+                canvas.Translate(-originalWidth / 2, -originalHeight / 2);
+                canvas.DrawBitmap(bitmap, new SKPoint());
+            }
+            
+            return rotatedBitmap;
         }
 
         private async Task SendNotifications(Camera camera, ISnapshotManager snapshotManager, IEnumerable<string> labels)
@@ -171,7 +243,7 @@ namespace SynoAI.Controllers
             {
                 foreach (AIPrediction prediction in predictions)
                 {
-                    _logger.LogInformation($"{camera}: {prediction.Label} ({prediction.Confidence}%)");
+                    _logger.LogInformation($"{camera}: {prediction.Label} ({prediction.Confidence}%) [Size: {prediction.SizeX}x{prediction.SizeY}] [Start: {prediction.MinX},{prediction.MinY} | End: {prediction.MaxX},{prediction.MaxY}]");
                 }
             }
 
